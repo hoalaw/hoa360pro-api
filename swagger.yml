@@ -1,0 +1,598 @@
+swagger: '2.0'
+info:
+  description: |
+    This API allows for 2 different types of use cases, firstly, by a Collection Agent and secondly, by an
+    HOA Mangement Company. The most notable difference is that the Collection Agent use-case allows
+    unrestricted record access and management. HOAs that do not use management companies are referred to as
+    self-managed HOAs, but fit into the same use case of HOA Management Company.
+
+    **Use-Case 1: Collection Agent**
+
+    This type of user uses the API to load (ETL) records from external systems into their HOA 360 Pro account.
+    The user can load data from their own collection management system or they may load the data from their
+    client's HOA Management system into their HOA 360 Pro account. For example ...
+      - A law firm doing collections for HOAs, migrates their records from TimeMatters to HOA 360 Pro.
+      - A law firm with a management company as a client which uses Jenark to manage HOA data, imports
+        account and property data from Jenark to HOA 360 Pro
+      - A law firm which obtains a book of business from another law firm, migrates data from that system
+        to their HOA 360 Pro account.
+
+    **Use-case 2: HOA Management Company or self-managed HOA**
+
+    This type of user uses the API to load HOA accounts that have been flagged for collections, from their
+    own database, into the HOA 360 Pro account of the Collecton Agent. The Collection Agent will then have
+    the data needed to conduct the collection process and provide reports through the HOA 360 Pro *Client Portal*.
+
+    **API Limitations**
+
+    The API is deliberately designed to not allow for returning arrays of data. For example, a "list" of contacts
+    or a "list" of accounts. All such data MUST be queried by an "import_key" that is provided at the time a record
+    is posted to HOA 360 Pro. **Reasoning:** the entity that loaded the data into HOA 360 Pro from an external data
+    source already has access to those lists in the external data source and therefore any query for such a list of
+    records would be superfluous. If the API user needs to verify if a record in their data source exists in HOA 360
+    Pro, they should make the approproiate "GET" request to find the record in HOA 360 Pro and confirm that it exists
+    and is correct. This provides an extra layer of protection because not only must an API request be authenticated,
+    but also to get data out of the HOA 360 Pro API, one must already know the corresponding unique "import_key"for
+    the record to retrieve.
+
+    **Definitions**
+
+    - import_key: a unique alpha-numeric ID for a specific type of record; synonymous with a primary key in a RDMS table
+    - parent record: a record that relates as a master record to sub-records (child records)
+    - Collection Agent: A business, such as a law firm, that conducts collection efforts in behalf of management companies
+      or self managed HOAs; in a typical case, the Collection Agent owns an HOA 360 Pro subscription,
+      however a management company / HOA may also have an HOA 360 Pro account to conduct it's own pre-collection
+      efforts.
+
+    **Record Hierachy**
+
+    Even though contact records are all added using the same `/contact` path, for simplicity sake, they actually
+    are hierachal in HOA 360 Pro. The different types of contact records are distinguished by their "ContactCategory".
+    These contact categories are
+      - "management_co" for management companies
+      - "management_co_contact" for property managers (staff of the management company)
+      - "hoa" for an HOA
+      - "hoa_contact" for a board member (a contact serving the HOA)
+
+    To properly add records according to the hierachy with a "parent_import_key", it's necessary to understand this
+    hierachy.
+
+    ```
+    Management Company (management_co)
+      \               \
+       \__ HOA (hoa)   \__ Manager (management_co_contact)
+           \  \
+            \  \__ Board Member (hoa_contact)
+             \____ Property
+                     \
+                      \__ Collection
+                              \ \ \__ Debit
+                               \ \___ Credit
+                                \____ Note
+    ```
+
+    So for example, according to the diagram, the parent record of a Property record, is an HOA record.
+    (Properties belong to an HOA)
+
+    **Note:** The only technical exception to this hierachy is for self-managed HOA's that do not have a
+    management company link. Management companies that use this API cannot add self-managed HOAs and any HOA
+    record added by a management company will automatically be linked to the management company using the API
+    to add the HOA record.
+
+    ----
+
+
+  title: 'HOA 360 Pro REST API'
+#  termsOfService: ''
+  contact:
+    email: 'mmugge@bpulse.net'
+  version: '0.0.1'
+basePath: '/0.0.1'
+host: 'api.hoa360pro.com'
+schemes:
+- 'https'
+security:
+  - basicAuth: []
+consumes:
+- 'application/json'
+produces:
+- 'application/json'
+
+paths:
+#############
+  /contact/{parent_import_key}:
+    post:
+      tags:
+        - Contact
+      summary: 'Upsert a contact record linked to a parent record.'
+      description: |
+        Used to add a contact such as an HOA, board member or manager. The record will be linked to a parent
+        record by the parent_import_key. The parent_import_key means the import_key set for the parent record
+        when it was posted.
+      operationId: postContactWithParentImportKey
+      parameters:
+      - in: body
+        name: body
+        description: 'Contact record to upsert'
+        required: true
+        schema:
+          $ref: '#/definitions/Contact'
+      - in: path
+        name: parent_import_key
+        type: string
+        required: true
+        description: Parent record to link to
+      responses:
+        404:
+          description: Parent record not found
+        405:
+          description: Invalid input
+          schema:
+            $ref: '#/definitions/ApiResponse'
+        200:
+          description: Success
+
+  /contact:
+    post:
+      tags:
+        - Contact
+      summary: 'Upsert a contact record without a parent record'
+      description: |
+        Used to add a self managed HOA or a management company. These records are not linked to parent records.
+
+        **NOTE**
+        When this route is used by an API client that is a mangement company, any attempts to upsert a record
+        with the ContactType of "management_co", will be rejected with a 403 status code. A management company
+        may not upsert a management company contact record.
+      operationId: postContact
+      parameters:
+      - in: body
+        name: body
+        description: 'Contact record to upsert'
+        required: true
+        schema:
+          $ref: '#/definitions/Contact'
+      responses:
+        405:
+          description: Invalid input
+          schema:
+            $ref: '#/definitions/ApiResponse'
+        403:
+          description: Forbidden
+        200:
+          description: Success
+
+  /contact/{contact_category}/{contact_import_key}:
+    get:
+      tags:
+        - Contact
+      summary: 'Get a contact record by the import key'
+      operationId: getContactByImportKey
+      parameters:
+        - name: contact_category
+          in: path
+          type: string
+          enum:
+            # mangement company
+            - management_co
+            # Home Owners Association
+            - hoa
+            # property manager is a management company contact:
+            - management_co_contact
+            # board member is an HOA contact
+            - hoa_contact
+          required: true
+          description: |
+            The type of contact record to search for as defined by it's contact category.
+
+            **NOTE:** For Use-case 2, "management_co" is not a valid contact category to search by
+            because management companies cannot search out data for other management companies.
+            Any attempt to conduct this type of search will simply return a 404 status code.
+        - name: contact_import_key
+          in: path
+          description: The import_key of the record to return.
+          required: true
+          type: integer
+          format: int32
+      responses:
+        200:
+          description: Success
+          schema:
+            $ref: '#/definitions/Contact'
+        404:
+          description: Not found
+
+#############
+  /property/{parent_import_key}:
+    post:
+      tags:
+        - Property
+      summary: 'Upsert a property with a unique import_key.'
+      operationId: postProperty
+      parameters:
+      - in: body
+        name: body
+        description: 'Property record to upsert'
+        required: true
+        schema:
+          $ref: '#/definitions/Property'
+      - in: path
+        name: parent_import_key
+        type: string
+        required: true
+        description: The import_key of the HOA record to link to.
+      responses:
+        404:
+          description: Parent record not found
+        405:
+          description: Invalid input
+          schema:
+            $ref: '#/definitions/ApiResponse'
+        200:
+          description: Success
+
+  /property/key/{import_key}:
+    get:
+      tags:
+        - Property
+      summary: Get a property record by the import key
+      operationId: getProperty
+      parameters:
+        - name: import_key
+          in: path
+          description: The import_key of the record to return
+          required: true
+          type: string
+      responses:
+        200:
+          description: Success
+          schema:
+            $ref: '#/definitions/Property'
+        404:
+          description: Not found
+
+
+#############
+  /collection/{parent_import_key}:
+    post:
+      tags:
+        - Collection
+      summary: Upsert a collection account with a unique import_key
+      operationId: postCollection
+      parameters:
+      - in: body
+        name: body
+        description: Collection account record to upsert
+        required: true
+        schema:
+          $ref: '#/definitions/Collection'
+      - in: path
+        name: parent_import_key
+        type: string
+        description: The import_key of the property record to link to
+        required: true
+      responses:
+        404:
+          description: Parent record not found
+        405:
+          description: Invalid input
+          schema:
+            $ref: '#/definitions/ApiResponse'
+        200:
+          description: Success
+
+  /collection/key/{import_key}:
+    get:
+      tags:
+        - Collection
+      summary: 'Get a collection account record by the import key'
+      operationId: getCollectionByImportKey
+      parameters:
+        - name: import_key
+          in: path
+          description: The import_key of the record to return
+          required: true
+          type: string
+      responses:
+        200:
+          description: Success
+          schema:
+            $ref: '#/definitions/Collection'
+        404:
+          description: Not found
+
+  /collection/case/{case_id}:
+    get:
+      tags:
+        - Collection
+      summary: 'Get a collection account record by the case ID'
+      operationId: getCollectionByCaseID
+      parameters:
+        - name: case_id
+          in: path
+          description: |
+            The case_id of the record to return if a case ID was provided when migrating data from another collection tracking system.
+            For example, for a client migrating from TimeMatters to HOA 360 Pro, this would be the case ID that was in TimeMatters.
+            This is not be the case ID from any previous collection agency and their collection tracking system.
+          required: true
+          type: string
+      responses:
+        200:
+          description: Success
+          schema:
+            $ref: '#/definitions/Collection'
+        404:
+          description: Not found
+
+  /collection/note/{parent_import_key}:
+    post:
+      tags:
+        - Collection
+      summary: 'Add collection note to a collection account'
+      operationId: postCollectionNote
+      parameters:
+      - in: body
+        name: body
+        description: 'Collection note data to add'
+        required: true
+        schema:
+          $ref: '#/definitions/CollectionNote'
+      - in: path
+        name: parent_import_key
+        type: string
+        required: true
+        description: The import_key of the collection record to link to.
+      responses:
+        404:
+          description: Parent record not found
+        405:
+          description: Invalid input
+          schema:
+            $ref: '#/definitions/ApiResponse'
+        200:
+          description: Success
+
+  /collection/debit/{parent_import_key}:
+    post:
+      tags:
+        - Collection
+      summary: 'Add collection debit (charge)'
+      operationId: postCollectionDebit
+      parameters:
+      - in: body
+        name: body
+        description: 'Collection debit data to add. Negative and zero values are not accepted.'
+        required: true
+        schema:
+          $ref: '#/definitions/CollectionTransaction'
+      - in: path
+        name: parent_import_key
+        type: string
+        required: true
+        description: The import_key of the collection record to link to.
+      responses:
+        404:
+          description: Parent record not found
+        405:
+          description: Invalid input
+          schema:
+            $ref: '#/definitions/ApiResponse'
+        200:
+          description: Success
+
+  /collection/credit/{parent_import_key}:
+    post:
+      tags:
+        - Collection
+      summary: 'Add collection credit (payment/refund)'
+      operationId: postCollectionCredit
+      parameters:
+      - in: body
+        name: body
+        description: 'Collection credit data to add. Negative and zero values are not accepted.'
+        required: true
+        schema:
+          $ref: '#/definitions/CollectionTransaction'
+      - in: path
+        name: parent_import_key
+        type: string
+        required: true
+        description: The import_key of the collection record to link to.
+      responses:
+        404:
+          description: Parent record not found
+        405:
+          description: Invalid input
+          schema:
+            $ref: '#/definitions/ApiResponse'
+        200:
+          description: Success
+
+#############
+
+securityDefinitions:
+  basicAuth:
+    type: basic
+
+definitions:
+
+  OwnerStatus:
+    title: Owner Status
+    type: string
+    enum:
+      - Current Owner
+      - Former Owner
+
+  StateAbbreviation:
+    title: State Abbreviation
+    type: string
+    enum:
+    - AK
+    - AL
+    - AR
+    - AZ
+    - CA
+    - CO
+    - CT
+    - DC
+    - DE
+    - FL
+    - GA
+    - HI
+    - IA
+    - ID
+    - IL
+    - IN
+    - KS
+    - KY
+    - LA
+    - MA
+    - MD
+    - ME
+    - MI
+    - MN
+    - MO
+    - MS
+    - MT
+    - NC
+    - ND
+    - NE
+    - NH
+    - NJ
+    - NM
+    - NV
+    - NY
+    - OH
+    - OK
+    - OR
+    - PA
+    - RI
+    - SC
+    - SD
+    - TN
+    - TX
+    - UT
+    - VA
+    - VT
+    - WA
+    - WI
+    - WV
+    - WY
+
+  ContactCategory:
+    title: Contact Category
+    type: string
+    enum:
+      - management_co
+      - hoa
+      # property manager is a management company contact:
+      - management_co_contact
+      # board member is an HOA contact
+      - hoa_contact
+
+  CollectionNote:
+    type: object
+    properties:
+      note_timestamp:
+        type: string
+        format: dateTime
+      note:
+        type: string
+      import_key:
+        type: string
+
+  CollectionTransaction:
+    type: object
+    properties:
+      import_key:
+        type: string
+      post_code_id:
+        type: string
+      posting_date:
+        type: string
+        format: dateTime
+      memo:
+        type: string
+      amount:
+        type: number
+        format: double
+
+  Property:
+    type: object
+    properties:
+      parent_id:
+        type: integer
+        format: int32
+      address:
+        type: string
+      city:
+        type: string
+      state:
+        $ref: '#/definitions/StateAbbreviation'
+      zip_code:
+        type: string
+
+  Collection:
+    type: object
+    properties:
+      payers:
+        type: string
+        description: Comma separated list of the full legal names of the debtors
+      mgmt_co_acc_id:
+        type: string
+        description: If the account ID id different from the record's import_key then it should be set here
+      flag_date:
+        type: string
+        description: The date the account was flagged as being officially delinquent
+      owner_status:
+        $ref: '#/definitions/OwnerStatus'
+      import_case_id:
+        type: string
+        description: If the account is being transferred from another collection agency with an existing case ID then provide that case ID here
+
+  Contact:
+    type: object
+    required:
+    - name
+    - phone
+    - email
+    - website
+    - comment
+    - street
+    - city
+    - state
+    - zip
+    - import_key
+    - category
+    properties:
+      name:
+        type: string
+      phone:
+        type: string
+      email:
+        type: string
+      website:
+        type: string
+      comment:
+        type: string
+      street:
+        type: string
+      city:
+        type: string
+      state:
+        $ref: '#/definitions/StateAbbreviation'
+      zip:
+        type: string
+      import_key:
+        type: string
+      category:
+        $ref: '#/definitions/ContactCategory'
+
+  ApiResponse:
+    type: object
+    properties:
+      code:
+        type: integer
+        format: int32
+      message:
+        type: string
